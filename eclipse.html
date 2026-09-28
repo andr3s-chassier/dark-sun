@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECLIPSE</title>
+    <script src="https://aframe.io/releases/1.8.0/aframe.min.js"></script>
+    <script>
+        // --- NOUVEAU COMPOSANT : CINÉMATIQUE DE L'ÉCLIPSE ---
+        // Orient la face du halo en permanence vers la caméra
+        AFRAME.registerComponent('look-at-camera', {
+          tick: function () {
+            let camera = this.el.sceneEl.camera;
+            if (camera) {
+              let camPos = new THREE.Vector3();
+              camera.getWorldPosition(camPos);
+              this.el.object3D.lookAt(camPos);
+            }
+          }
+        });
+        // Génération du dégradé radial en texture HTML5 Canvas
+        window.addEventListener('DOMContentLoaded', () => {
+          const canvas = document.getElementById('halo-canvas');
+          if (!canvas) return;
+          
+          const ctx = canvas.getContext('2d');
+          const center = 128; // Centre du canvas (256x256)
+
+          // createRadialGradient(x0, y0, r0, x1, y1, r1)
+          const gradient = ctx.createRadialGradient(center, center, 35, center, center, 128);
+          
+          // Couleurs : Rouge vif au centre -> Rouge sombre -> Noir totalement transparent au bord
+          gradient.addColorStop(0.5, 'rgba(255, 0, 34, 1)');   // Départ au bord du soleil
+          // gradient.addColorStop(0.7, 'rgba(150, 0, 20, 0.5)');
+          gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');        //è Disparition totale au noir
+
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, 256, 256);
+        });
+        AFRAME.registerComponent('eclipse-animator', {
+          init: function () {
+            this.angle = 90; // Angle de départ (comme dans votre animation originale)
+            this.sun = document.querySelector('#soleil');
+            this.sunLight = document.querySelector('#sun-light');
+          },
+          tick: function (time, timeDelta) {
+            if (!timeDelta) return;
+
+            // Boucle infinie : on repart à 90 quand on fait un tour complet (-270)
+            if (this.angle <= -270) {
+              this.angle = 90;
+            }
+
+            // L'éclipse totale a lieu quand l'angle est exactement à 0.
+            let distanceToEclipse = Math.abs(this.angle);
+            
+            // Vitesse de rotation par défaut (assez rapide)
+            let currentSpeed = 0.08; 
+
+            // Ralentissement dramatique (démarre 45 degrés avant l'éclipse)
+            if (distanceToEclipse < 45) {
+              // Plus on est proche de 0, plus la vitesse approche 0.0005 (presque à l'arrêt)
+              currentSpeed = 0.0005 + (distanceToEclipse / 45) * 0.0795;
+            }
+
+            // Application de la rotation sur l'axe Z à la Terre
+            this.angle -= currentSpeed * (timeDelta / 16);
+            this.el.setAttribute('rotation', `0 0 ${this.angle}`);
+
+            // Effet d'explosion de lumière lors de l'éclipse totale (dans les 5 derniers degrés)
+            if (distanceToEclipse < 5) {
+              // Pic d'intensité au centre exact (quand distance = 0)
+              let boost = 1 - (distanceToEclipse / 5); // Monte de 0 à 1
+              
+              let intensity = 1.5 + (boost * 15); // La lumière ambiante rouge explose jusqu'à 16.5
+              let emissiveIntensity = 1 + (boost * 8); // Le matériau du soleil devient éblouissant
+              
+              this.sunLight.setAttribute('intensity', intensity);
+              this.sun.setAttribute('material', `shader: flat; emissive: #FFD700; emissiveIntensity: ${emissiveIntensity}`);
+            } else {
+              // Retour à la normale quand l'éclipse est passée ou pas encore là
+              this.sunLight.setAttribute('intensity', 1.5);
+              this.sun.setAttribute('material', 'shader: flat; emissive: #FFD700; emissiveIntensity: 1');
+            }
+          }
+        });
+
+        // Composant ZQSD + Axe Y + Détection de collisions (Inchangé)
+        AFRAME.registerComponent('zqsd-controls', {
+          schema: { 
+            speed: { type: 'number', default: 0.1 },
+            distance: { type: 'number', default: 0.8 } 
+          },
+          init: function () {
+            this.keys = {};
+            window.addEventListener('keydown', (e) => { this.keys[e.key.toLowerCase()] = true; });
+            window.addEventListener('keyup', (e) => { this.keys[e.key.toLowerCase()] = false; });
+            
+            this.raycaster = new THREE.Raycaster();
+            this.worldPos = new THREE.Vector3();
+          },
+          tick: function () {
+            let el = this.el;
+            let cameraEl = el.querySelector('[camera]') || el;
+            
+            let matrix = new THREE.Matrix4();
+            matrix.extractRotation(cameraEl.object3D.matrixWorld);
+  
+            let forward = new THREE.Vector3(0, 0, -1).applyMatrix4(matrix);
+            let right = new THREE.Vector3(1, 0, 0).applyMatrix4(matrix);
+  
+            forward.y = 0; forward.normalize();
+            right.y = 0; right.normalize();
+  
+            let moveX = 0, moveZ = 0, moveY = 0;
+  
+            if (this.keys['z']) moveZ += 1;  
+            if (this.keys['s']) moveZ -= 1;  
+            if (this.keys['q']) moveX -= 1;  
+            if (this.keys['d']) moveX += 1;  
+  
+            if (this.keys['e'] || this.keys[' ']) moveY += 1;     
+            if (this.keys['a'] || this.keys['shift']) moveY -= 1; 
+  
+            if (moveX === 0 && moveY === 0 && moveZ === 0) return;
+  
+            let movement = new THREE.Vector3();
+            movement.addScaledVector(forward, moveZ);
+            movement.addScaledVector(right, moveX);
+            movement.y += moveY;
+  
+            if (movement.lengthSq() === 0) return;
+            movement.normalize();
+  
+            el.object3D.getWorldPosition(this.worldPos);
+            this.raycaster.set(this.worldPos, movement);
+  
+            let collidables = Array.from(document.querySelectorAll('.collidable'))
+                                   .map(item => item.object3D)
+                                   .filter(obj => obj !== undefined);
+  
+            let intersects = this.raycaster.intersectObjects(collidables, true);
+  
+            if (intersects.length > 0 && intersects[0].distance < this.data.distance) {
+              return;
+            }
+  
+            let pos = el.getAttribute('position');
+            pos.x += movement.x * this.data.speed;
+            pos.y += movement.y * this.data.speed;
+            pos.z += movement.z * this.data.speed;
+  
+            el.setAttribute('position', pos);
+          }
+        });
+      </script>
+</head>
+<body>
+    <a-scene>
+        <a-assets>
+            <img id="floor" src="floor.jpg"> 
+            <img id="sky" src="nuit.avif"> 
+            <canvas id="halo-canvas" width="256" height="256"></canvas>
+        </a-assets>
+
+        <!-- Joueur -->
+        <a-entity id="rig" position="0 1 0" zqsd-controls="speed: 0.1; distance: 0.8">
+          <a-entity camera="far: 10000" look-controls="pointerLockEnabled: true"></a-entity>
+        </a-entity>
+
+        <!-- ESPACE -->
+        <a-sky src="#sky"></a-sky>
+        <a-plane rotation="-90 0 0" width="50" height="50" src="#floor" repeat="20 20"></a-plane>
+        <a-light type="ambient" color="#888888" intensity="0.2"></a-light>
+
+        
+        <!-- ECLIPSE -->
+        <a-sphere rotation="-45 0 0" position="0 1 0" radius="0">
+
+          <!-- La Terre utilise désormais le composant eclipse-animator au lieu du tag animation -->
+          <a-sphere src="terre.jpg" eclipse-animator>
+            <a-sphere position="0 100 0" radius="18" src="moon.jpg"></a-sphere>
+          </a-sphere>
+
+          <!-- J'ai ajouté l'ID 'sun-light' pour que le script puisse y accéder -->
+          <!-- SOLEIL ET SON HALO BILLBOARD -->
+          <a-sphere id="soleil"
+                position="0 200 0" 
+                radius="31" 
+                color="red" 
+                material="shader: flat; emissive: #FFD700; emissiveIntensity: 1;">
+
+          <!-- Plane avec texture dégradée orienté vers le joueur -->
+          <a-plane width="122" 
+                  height="122" 
+                  src="#halo-canvas" 
+                  look-at-camera
+                  material="shader: flat; transparent: true; depthWrite: false">
+          </a-plane>
+
+          <a-light id="sun-light"
+                  type="directional" 
+                  color="red" 
+                  intensity="1.5" 
+                  position="0 0 0">
+          </a-light>
+      </a-sphere>
+
+        </a-sphere>
+        
+
+        <!-- DÉCOR EXISTANT -->
+        <a-entity position="20 0 -20" animation="property: rotation; 
+                from: 0 -135 -2; to: 0 -135 -8; dur: 3000; 
+                easing: easeInOutSine; dir: alternate; 
+                loop: true">
+            <a-cylinder position="0 5.8 0" rotation="0 180 0" radius="0.3" height="12" width="0.1" color="#b4b3b1" metalness="0.7"> 
+            </a-cylinder>
+            <a-cylinder position="0.15 12 0" radius="4" rotation="90 90 0" height="0.5" color="#fb2333" metalness="0.7"></a-cylinder>
+            <a-cylinder position="0.17 12 0" radius="3" rotation="90 90 0" height="0.52" color="#ffffff" metalness="0.7"></a-cylinder>
+            <a-box position="0.16 12 0" rotation="45 0 180" width="0.56" height="6" depth="1" color="#fb2333" metalness="0.7"></a-box>
+            <a-entity position="0.2 7.3 0" rotation="0 90 0" name="pancarte_interdit">
+                <a-box position="0 0 0" rotation="0 0 0" width="6" height="1.25" depth="0.4" color="#fb2333" metalness="0.7"></a-box>
+                <a-entity
+                    position="0 0 0.3"
+                    text="color: white; 
+                    align: center; 
+                    value: DONT BE DUMB; 
+                    width: 15">
+                </a-entity>
+            </a-entity>
+        </a-entity> 
+
+    </a-scene>
+    <!-- Si vous avez encore besoin de LE_SCRIPT.JS, vous pouvez le garder actif -->
+    <script src="LE_SCRIPT.JS"></script>
+</body>
+</html>
